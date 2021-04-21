@@ -45,6 +45,7 @@ Clunie's
 CoRR
 Colocalization
 ComposeImageFilter
+ComposeScaleSkewVersor
 CompositeTransform
 ConfidenceConnected
 ConjugateGradientLineSearch
@@ -211,6 +212,7 @@ RGB
 RIRE
 RLE
 ROIs
+RSK
 Radiographic
 ReadImage
 ReadImageInformation
