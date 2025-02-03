@@ -65,6 +65,12 @@ Run a DICOM series based analysis:
 python characterize_data.py ../Data/ Output/DICOM_image_data_report.csv per_series \
 --metadata_keys "0008|0060" "0018|5101" --metadata_keys_headings "modality" "radiographic view"
 
+Run a generic file analysis, omit problematic files from csv (--ignore_problems) and create a summary
+image which is comprised of thumbnails from all the images.
+python characterize_data.py ../../Data/ Output/generic_image_data_report.csv per_file \
+--external_applications ./dciodvfy --external_applications_headings "DICOM compliant" \
+--metadata_keys "0008|0060" --metadata_keys_headings modality --ignore_problems --create_summary_image
+
 Output:
 The raw information is written to the specified output file (e.g. output.csv).
 Additionally, minimal analysis of the raw information is performed:
@@ -74,11 +80,42 @@ Additionally, minimal analysis of the raw information is performed:
 NOTE: For the same directory structure, the order of the rows in the output csv file will vary
 across operating systems (order of files in the "files" column also varies). This is a consequence
 of using os.walk to traverse the file system (internally os.walk uses os.scandir and that method's 
-documentation says "The entries are yielded in arbitrary order.").  
+documentation says "The entries are yielded in arbitrary order.").
+
+Convert from x, y, z (zero based) indexes from the "summary image" to information from "summary csv" file.
+
+import pandas as pd
+import SimpleITK as sitk
+
+def xyz_to_index(x, y, z):
+    tile_size=[20, 20]
+    thumbnail_size=[64, 64]
+    # add 2 to the index because the csv starts counting lines at 1 and the first
+    # line is the table header
+    return (z * tile_size[0] * tile_size[1]
+            + int(y / thumbnail_size[1]) * tile_size[0]
+            + int(x / thumbnail_size[0])
+            )
+
+csv_file_name = "Output/generic_image_data_report.csv"
+df = pd.read_csv(csv_file_name)
+
+file_names = eval(df["files"].iloc[xyz_to_index(x=xval, y=yval, z=zval)])
+print(file_names)
+sitk.Show(sitk.ReadImage(file_names))
 """
 
 
-def inspect_image(sitk_image, image_info, meta_data_info):
+def dir_path(path):
+    if os.path.isdir(path):
+        return path
+    else:
+        raise argparse.ArgumentTypeError(
+            f"Invalid argument ({path}), not a directory path or directory does not exist."
+        )
+
+
+def inspect_image(sitk_image, image_info, meta_data_info, create_summary_image):
     """
     Inspect a SimpleITK image, and update the image_info dictionary with the values associated with the
     contents of the meta_data_info.
@@ -139,10 +176,16 @@ def inspect_image(sitk_image, image_info, meta_data_info):
     for k, v in meta_data_info.items():
         if v in img_keys:
             image_info[k] = sitk_image.GetMetaData(v)
+    if create_summary_image:
+        image_info["thumbnail"] = image_to_thumbnail(sitk_image)
 
 
 def inspect_single_file(
-    file_name, imageIO="", meta_data_info={}, external_programs_info={}
+    file_name,
+    imageIO="",
+    meta_data_info={},
+    external_programs_info={},
+    create_summary_image=False,
 ):
     """
     Inspect a file using the specified imageIO, returning a dictionary with the relevant information.
@@ -180,7 +223,7 @@ def inspect_single_file(
         reader.SetImageIO(imageIO)
         reader.SetFileName(file_name)
         img = reader.Execute()
-        inspect_image(img, file_info, meta_data_info)
+        inspect_image(img, file_info, meta_data_info, create_summary_image)
         for k, p in external_programs_info.items():
             try:
                 # run the external programs, check the return value, and capture all output so it
@@ -200,6 +243,7 @@ def inspect_files(
     imageIO="",
     meta_data_info={},
     external_programs_info={},
+    create_summary_image=False,
 ):
     """
     Iterate over a directory structure and return a pandas dataframe with the relevant information for the
@@ -244,6 +288,7 @@ def inspect_files(
                 imageIO=imageIO,
                 meta_data_info=meta_data_info,
                 external_programs_info=external_programs_info,
+                create_summary_image=create_summary_image,
             ),
             all_file_names,
         )
@@ -255,13 +300,14 @@ def inspect_files(
                     imageIO=imageIO,
                     meta_data_info=meta_data_info,
                     external_programs_info=external_programs_info,
+                    create_summary_image=create_summary_image,
                 ),
                 all_file_names,
             )
     return pd.DataFrame.from_dict(res)
 
 
-def inspect_single_series(series_data, meta_data_info={}):
+def inspect_single_series(series_data, meta_data_info={}, create_summary_image=False):
     """
     Inspect a single DICOM series (DICOM hierarchy of patient-study-series-image).
     This can be a single file, or multiple files such as a CT or
@@ -312,13 +358,13 @@ def inspect_single_series(series_data, meta_data_info={}):
             for k in meta_data_info.values():
                 if reader.HasMetaDataKey(0, k):
                     img.SetMetaData(k, reader.GetMetaData(0, k))
-            inspect_image(img, series_info, meta_data_info)
+            inspect_image(img, series_info, meta_data_info, create_summary_image)
     except Exception:
         pass
     return series_info
 
 
-def inspect_series(root_dir, meta_data_info={}):
+def inspect_series(root_dir, meta_data_info={}, create_summary_image=False):
     """
     Inspect all series found in the directory structure. A series does not have to
     be in a single directory (the files are located in the subtree and combined
@@ -361,16 +407,185 @@ def inspect_series(root_dir, meta_data_info={}):
     # Get list of dictionaries describing the results and then combine into a dataframe, faster
     # than appending to the dataframe one by one.
     res = [
-        inspect_single_series(series_data, meta_data_info)
+        inspect_single_series(series_data, meta_data_info, create_summary_image)
         for series_data in all_series_files.items()
     ]
     return pd.DataFrame.from_dict(res)
 
 
+def image_to_thumbnail(
+    img,
+    thumbnail_size=[64, 64],
+    interpolator=sitk.sitkNearestNeighbor,
+    projection_axis=2,
+):
+    """
+    Create a grayscale thumbnail image from the given image. If the image is 3D it is
+    projected to 2D using a Maximum Intensity Projection (MIP) approach. Color images
+    are converted to grayscale, and high dynamic range images are window leveled using
+    a robust estimate of the relevant minimum and maximum intensity values.
+
+    Parameters
+    ----------
+    img (SimpleITK.Image): A 2D or 3D grayscale or sRGB image.
+    thumbnail_size (list/tuple(int)): The 2D sizes of the thumbnail.
+    interpolator: Interpolator to use when resampling to a thumbnail. Nearest neighbor
+                  is computationally efficient and is applicable for
+                  both segmentation masks and scalar images.
+    projection_axis(int in [0,2]): The axis along which we project 3D images.
+
+    Returns
+    -------
+    2D SimpleITK image with sitkUInt8 pixel type.
+    """
+    if (
+        img.GetDimension() == 3 and img.GetSize()[2] == 1
+    ):  # 2D image masquerading as 3D image
+        img = img[:, :, 0]
+    elif img.GetDimension() == 3:  # 3D image projected along projection_axis direction
+        img = sitk.MaximumProjection(img, projection_axis)
+        slc = list(img.GetSize())
+        slc[projection_axis] = 0
+        img = sitk.Extract(img, slc)
+    # convert multi-channel image to gray
+    # sRGB, sRGBA or image with more than 4 channels. assume the first three channels represent
+    # RGB. when there are more than 4 channels this assumption is likely incorrect, but there's
+    # nothing more sensible to do. maybe select an arbitrary channel but that is problematic
+    # if the 4 channel image is sRGBA and A is 255, so selecting the last channel is just a "white" image.
+    if img.GetNumberOfComponentsPerPixel() >= 3:
+        # Convert image to gray scale and rescale results to [0,255]
+        channels = [
+            sitk.VectorIndexSelectionCast(img, i, sitk.sitkFloat32) for i in range(3)
+        ]
+        # linear mapping
+        I = (
+            1
+            / 255.0
+            * (0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2])
+        )
+        # nonlinear gamma correction
+        I = (
+            I * sitk.Cast(I <= 0.0031308, sitk.sitkFloat32) * 12.92
+            + I ** (1 / 2.4) * sitk.Cast(I > 0.0031308, sitk.sitkFloat32) * 1.055
+            - 0.055
+        )
+        img = sitk.Cast(sitk.RescaleIntensity(I), sitk.sitkUInt8)
+    else:
+        if img.GetPixelID() != sitk.sitkUInt8:
+            # To deal with high dynamic range images that also contain outlier intensities
+            # we use window-level intensity mapping and set the window:
+            # to [max(Q1 - w*IQR, min_intensity), min(Q3 + w*IQR, max_intensity)]
+            # IQR = Q3-Q1
+            # The bounds which should exclude outliers are defined by the parameter w,
+            # where 1.5 is a standard default value (same as used in box and
+            # whisker plots to define whisker lengths).
+            w = 1.5
+            min_val, q1_val, q3_val, max_val = np.percentile(
+                sitk.GetArrayViewFromImage(img).ravel(), [0, 25, 75, 100]
+            )
+            min_max = [
+                np.max([(1.0 + w) * q1_val - w * q3_val, min_val]),
+                np.min([(1.0 + w) * q3_val - w * q1_val, max_val]),
+            ]
+            wl_image = sitk.IntensityWindowing(
+                img,
+                windowMinimum=min_max[0],
+                windowMaximum=min_max[1],
+                outputMinimum=0.0,
+                outputMaximum=255.0,
+            )
+            img = sitk.Cast(wl_image, sitk.sitkUInt8)
+        else:
+            img = sitk.IntensityWindowing(
+                img,
+                windowMinimum=np.min(sitk.GetArrayViewFromImage(img)),
+                windowMaximum=np.max(sitk.GetArrayViewFromImage(img)),
+            )
+    res = sitk.Resample(
+        img,
+        size=thumbnail_size,
+        transform=sitk.Transform(),
+        interpolator=sitk.sitkLinear,
+        outputOrigin=img.GetOrigin(),
+        outputSpacing=[
+            (sz - 1) * spc / (nsz - 1)
+            for nsz, sz, spc in zip(thumbnail_size, img.GetSize(), img.GetSpacing())
+        ],
+        outputDirection=img.GetDirection(),
+        defaultPixelValue=0,
+        outputPixelType=img.GetPixelID(),
+    )
+    # new_spacing = [
+    #     ((osz - 1) * ospc) / (nsz - 1)
+    #     for ospc, osz, nsz in zip(img.GetSpacing(), img.GetSize(), thumbnail_size)
+    # ]
+    # new_spacing = [max(new_spacing)] * img.GetDimension()
+    # center = img.TransformContinuousIndexToPhysicalPoint(
+    #     [sz / 2.0 for sz in img.GetSize()]
+    # )
+    # new_origin = [
+    #     c - c_index * nspc
+    #     for c, c_index, nspc in zip(
+    #         center, [sz / 2.0 for sz in thumbnail_size], new_spacing
+    #     )
+    # ]
+    # res = sitk.Resample(
+    #     img,
+    #     size=thumbnail_size,
+    #     transform=sitk.Transform(),
+    #     interpolator=interpolator,
+    #     outputOrigin=new_origin,
+    #     outputSpacing=new_spacing,
+    #     outputDirection=img.GetDirection(),
+    #     defaultPixelValue=0,
+    #     outputPixelType=img.GetPixelID(),
+    # )
+    res.SetOrigin([0, 0])
+    res.SetSpacing([1, 1])
+    res.SetDirection([1, 0, 0, 1])
+    return res
+
+
+def image_list_to_faux_volume(image_list, tile_size=[20, 20]):
+    """
+    Create a faux volume from a list of images all having the same size.
+
+    Parameters
+    ----------
+    image_list (list[SimpleITK.Image]): List of images all with the same size.
+    tile_size([int,int]): The number of images in x and y in each faux volume slice.
+
+    Returns
+    -------
+    3D SimpleITK image combining all the images contained in the image_list.
+    """
+    step_size = tile_size[0] * tile_size[1]
+    faux_volume_slices = [
+        sitk.Tile(image_list[i : i + step_size], tile_size, 0)
+        for i in range(0, len(image_list), step_size)
+    ]
+    # if last tile image is smaller than others, add background content to match the size
+    if len(faux_volume_slices) > 1 and (
+        faux_volume_slices[-1].GetHeight() != faux_volume_slices[-2].GetHeight()
+        or faux_volume_slices[-1].GetWidth() != faux_volume_slices[-2].GetWidth()
+    ):
+        image = sitk.Image(faux_volume_slices[-2]) * 0
+        faux_volume_slices[-1] = sitk.Paste(
+            image,
+            faux_volume_slices[-1],
+            faux_volume_slices[-1].GetSize(),
+            [0, 0],
+            [0, 0],
+        )
+    return sitk.JoinSeries(faux_volume_slices)
+
+
 def characterize_data(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "root_of_data_directory", help="path to the topmost directory containing data"
+        "root_of_data_directory",
+        type=dir_path,
+        help="path to the topmost directory containing data",
     )
     parser.add_argument("output_file", help="output csv file path")
     parser.add_argument(
@@ -412,6 +627,11 @@ def characterize_data(argv=None):
         action="store_true",
         help="problematic files will not be listed if parameter is given on commandline",
     )
+    parser.add_argument(
+        "--create_summary_image",
+        action="store_true",
+        help="create a summary image, volume of thumbnails representing all images",
+    )
 
     args = parser.parse_args(argv)
     if len(args.external_applications) != len(args.external_applications_headings):
@@ -432,12 +652,32 @@ def characterize_data(argv=None):
             external_programs_info=dict(
                 zip(args.external_applications_headings, args.external_applications)
             ),
+            create_summary_image=args.create_summary_image,
         )
     elif args.analysis_type == "per_series":
         df = inspect_series(
             args.root_of_data_directory,
             meta_data_info=dict(zip(args.metadata_keys_headings, args.metadata_keys)),
+            create_summary_image=args.create_summary_image,
         )
+    # corner case, no images
+    if len(df.columns) == 1:
+        print(
+            f"No report created, mo successfully read images from root directory {args.root_of_data_directory}"
+        )
+        return 0
+
+    # create summary image and remove the column containing the thumbnail images from the
+    # dataframe.
+    if args.create_summary_image:
+        faux_volume = image_list_to_faux_volume(df["thumbnail"].dropna().to_list())
+        sitk.WriteImage(
+            faux_volume,
+            f"{os.path.splitext(args.output_file)[0]}_summary_image.nrrd",
+            useCompression=True,
+        )
+        df.drop("thumbnail", axis=1, inplace=True)
+
     # remove all rows associated with problematic files (non-image files or image files with problems).
     # all the valid rows contain at least 2 non-na values so use that threshold when dropping rows.
     if args.ignore_problems:
