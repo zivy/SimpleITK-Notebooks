@@ -4,7 +4,7 @@ channels:
   - conda-forge
 
 dependencies:
-  - python=3.11
+  - python=3.13
   - requests
   - jupyter
   - matplotlib
@@ -16,4 +16,4 @@ dependencies:
   - numba
   - multiprocess
   - tqdm
-  - SimpleITK>2.2.1
+  - SimpleITK>3.0.0
