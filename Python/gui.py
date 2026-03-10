@@ -278,7 +278,11 @@ class RegistrationPointDataAquisition(object):
         self.moving_axes.set_xlim(moving_xlim)
         self.moving_axes.set_ylim(moving_ylim)
 
+        # Schedule redraw and flush events to force immediate update with ipympl backend.
+        # Using draw_idle()+flush_events() instead of draw() allows matplotlib to optimize
+        # the redraw while still ensuring immediate display update.
         self.fig.canvas.draw_idle()
+        self.fig.canvas.flush_events()
 
     def clear_all(self, button):
         """
@@ -520,7 +524,11 @@ class PointDataAquisition(object):
         self.axes.set_xlim(xlim)
         self.axes.set_ylim(ylim)
 
+        # Schedule redraw and flush events to force immediate update with ipympl backend.
+        # Using draw_idle()+flush_events() instead of draw() allows matplotlib to optimize
+        # the redraw while still ensuring immediate display update.
         self.fig.canvas.draw_idle()
+        self.fig.canvas.flush_events()
 
     def add_point_indexes(self, point_index_data):
         self.validate_points(point_index_data)
@@ -824,7 +832,11 @@ class MultiImageDisplay(object):
             ax.set_xlim(xlim)
             ax.set_ylim(ylim)
 
+        # Schedule redraw and flush events to force immediate update with ipympl backend.
+        # Using draw_idle()+flush_events() instead of draw() allows matplotlib to optimize
+        # the redraw while still ensuring immediate display update.
         self.fig.canvas.draw_idle()
+        self.fig.canvas.flush_events()
 
 
 class ROIDataAquisition(object):
@@ -978,7 +990,11 @@ class ROIDataAquisition(object):
         self.axes.set_title(f"selected {len(self.rois)} ROIs")
         self.axes.set_axis_off()
 
+        # Schedule redraw and flush events to force immediate update with ipympl backend.
+        # Using draw_idle()+flush_events() instead of draw() allows matplotlib to optimize
+        # the redraw while still ensuring immediate display update.
         self.fig.canvas.draw_idle()
+        self.fig.canvas.flush_events()
 
     def add_roi_data(self, roi_data):
         """
@@ -1040,26 +1056,32 @@ class ROIDataAquisition(object):
                     )
 
     def add_roi(self, button):
-        if self.roi_selector.visible:
-            self.roi_selector.set_visible(False)
-            # Extent is in sub-pixel coordinates, we need it in pixels/voxels.
+        # Check if a valid rectangle has been drawn by checking extents
+        # rather than just visible state which may not work reliably with ipympl
+        try:
             roi_extent = [int(round(coord)) for coord in self.roi_selector.extents]
-            # We keep the patch for display and the x,y,z ranges of the ROI.
-            self.rois.append(
-                (
-                    patches.Rectangle(
-                        (roi_extent[0], roi_extent[2]),
-                        roi_extent[1] - roi_extent[0],
-                        roi_extent[3] - roi_extent[2],
-                        **self.roi_display_properties,
-                    ),
-                    (roi_extent[0], roi_extent[1]),
-                    (roi_extent[2], roi_extent[3]),
-                    self.roi_range_slider.value if self.roi_range_slider else None,
+            # Check if the rectangle has non-zero area
+            if (roi_extent[1] - roi_extent[0] > 0 and roi_extent[3] - roi_extent[2] > 0):
+                self.roi_selector.set_visible(False)
+                # We keep the patch for display and the x,y,z ranges of the ROI.
+                self.rois.append(
+                    (
+                        patches.Rectangle(
+                            (roi_extent[0], roi_extent[2]),
+                            roi_extent[1] - roi_extent[0],
+                            roi_extent[3] - roi_extent[2],
+                            **self.roi_display_properties,
+                        ),
+                        (roi_extent[0], roi_extent[1]),
+                        (roi_extent[2], roi_extent[3]),
+                        self.roi_range_slider.value if self.roi_range_slider else None,
+                    )
                 )
-            )
-            self.axes.add_patch(self.rois[-1][0])
-            self.update_display()
+                self.axes.add_patch(self.rois[-1][0])
+                self.update_display()
+        except (AttributeError, TypeError):
+            # No valid rectangle drawn yet
+            pass
 
     def clear_all_data(self):
         for roi_data in self.rois:
@@ -1290,7 +1312,11 @@ class PairedPointDataManipulation(object):
         self.axes.set_xlim([0, self.scale])
         self.axes.set_ylim([0, self.scale])
 
+        # Schedule redraw and flush events to force immediate update with ipympl backend.
+        # Using draw_idle()+flush_events() instead of draw() allows matplotlib to optimize
+        # the redraw while still ensuring immediate display update.
         self.fig.canvas.draw_idle()
+        self.fig.canvas.flush_events()
 
     def update_centroid_and_display(self, button):
         self.update_centroid()
