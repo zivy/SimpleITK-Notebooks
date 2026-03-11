@@ -1,5 +1,6 @@
 LabelMapContourOverlay
 MergeLabelMapFilter's
+asarray
 ipympl
 ACM
 ANTSNeighborhoodCorrelation
