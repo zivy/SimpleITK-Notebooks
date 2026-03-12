@@ -25,6 +25,56 @@ import matplotlib.patches as patches
 import matplotlib.cm as cm
 from matplotlib.ticker import MaxNLocator
 import copy
+from time import time
+from threading import Timer
+
+
+def throttle(wait):
+    """
+    Decorator that prevents a function from being called more than once every wait period.
+    Schedules the most recent call to execute after the wait period, ensuring the last
+    event is always processed.
+
+    We use this decorator to prevent ZMQ stream overflow when rapidly moving
+    ipywidgets sliders that invoke computationally complex rendering operations that
+    lead to events accumulating in the queue. When overflow occurs the queue is closed
+    and the following error is printed to the commandline: "Got events for closed stream
+    <zmq.eventloop.zmqstream.ZMQStream object at ..."
+    Consequntially, GUIs in a notebook become unresponsive as the
+    events created by the controls are not processed and the figure display is not updated.
+
+    From ipywidgets documentation:
+    https://ipywidgets.readthedocs.io/en/latest/examples/Widget%20Events.html#throttling
+
+    Args:
+        wait: Minimum time (in seconds) between function calls
+    """
+
+    def decorator(fn):
+        time_of_last_call = 0
+        scheduled, timer = False, None
+        new_args, new_kwargs = None, None
+
+        def throttled(*args, **kwargs):
+            nonlocal new_args, new_kwargs, time_of_last_call, scheduled, timer
+
+            def call_it():
+                nonlocal new_args, new_kwargs, time_of_last_call, scheduled, timer
+                time_of_last_call = time()
+                fn(*new_args, **new_kwargs)
+                scheduled = False
+
+            time_since_last_call = time() - time_of_last_call
+            new_args, new_kwargs = args, kwargs
+            if not scheduled:
+                scheduled = True
+                new_wait = max(0, wait - time_since_last_call)
+                timer = Timer(new_wait, call_it)
+                timer.start()
+
+        return throttled
+
+    return decorator
 
 
 class RegistrationPointDataAquisition(object):
@@ -43,6 +93,7 @@ class RegistrationPointDataAquisition(object):
         known_transformation=None,
         image1_title="fixed image",
         image2_title="moving image",
+        throttle_wait=0.05,
     ):
         self.fixed_image = fixed_image
         (
@@ -65,6 +116,12 @@ class RegistrationPointDataAquisition(object):
         self.text_and_marker_color = "red"
         self.image1_title = image1_title
         self.image2_title = image2_title
+
+        # Apply throttling to slider callback
+        self.on_slice_slider_value_change = throttle(throttle_wait)(
+            self._on_slice_slider_value_change
+        )
+
         ui = self.create_ui()
         display(ui)
 
@@ -171,7 +228,7 @@ class RegistrationPointDataAquisition(object):
                 window_level[1] + window_level[0] / 2.0,
             )
 
-    def on_slice_slider_value_change(self, change):
+    def _on_slice_slider_value_change(self, change):
         self.update_display()
 
     def update_display(self):
@@ -393,7 +450,9 @@ class RegistrationPointDataAquisition(object):
 
 
 class PointDataAquisition(object):
-    def __init__(self, image, window_level=None, figure_size=(10, 8)):
+    def __init__(
+        self, image, window_level=None, figure_size=(10, 8), throttle_wait=0.05
+    ):
         self.image = image
         (
             self.npa,
@@ -401,6 +460,11 @@ class PointDataAquisition(object):
             self.max_intensity,
         ) = self.get_window_level_numpy_array(self.image, window_level)
         self.point_indexes = []
+
+        # Apply throttling to slider callback
+        self.on_slice_slider_value_change = throttle(throttle_wait)(
+            self._on_slice_slider_value_change
+        )
 
         ui = self.create_ui()
         display(ui)
@@ -474,7 +538,7 @@ class PointDataAquisition(object):
                 window_level[1] + window_level[0] / 2.0,
             )
 
-    def on_slice_slider_value_change(self, change):
+    def _on_slice_slider_value_change(self, change):
         self.update_display()
 
     def update_display(self):
@@ -665,6 +729,7 @@ class MultiImageDisplay(object):
         intensity_slider_range_percentile=[2, 98],
         figure_size=(10, 8),
         horizontal=True,
+        throttle_wait=0.07,  # about 1/15sec, so about 15 redraws per second
     ):
         self.npa_list, wl_range, wl_init = self.get_window_level_numpy_array(
             image_list, window_level_list, intensity_slider_range_percentile
@@ -679,6 +744,14 @@ class MultiImageDisplay(object):
         # Our dynamic slice, based on the axis the user specifies
         self.slc = [slice(None)] * 3
         self.axis = axis
+
+        # Apply throttling to slider callbacks
+        self.on_slice_slider_value_change = throttle(throttle_wait)(
+            self._on_slice_slider_value_change
+        )
+        self.on_wl_slider_value_change = throttle(throttle_wait)(
+            self._on_wl_slider_value_change
+        )
 
         ui = self.create_ui(shared_slider, wl_range, wl_init)
         display(ui)
@@ -800,10 +873,10 @@ class MultiImageDisplay(object):
                         wl_init.append(wl_range[-1])
         return (npa_list, wl_range, wl_init)
 
-    def on_slice_slider_value_change(self, change):
+    def _on_slice_slider_value_change(self, change):
         self.update_display()
 
-    def on_wl_slider_value_change(self, change):
+    def _on_wl_slider_value_change(self, change):
         self.update_display()
 
     def update_display(self):
@@ -850,7 +923,9 @@ class ROIDataAquisition(object):
     correct behavior, though initially you may be surprised by it.
     """
 
-    def __init__(self, image, window_level=None, figure_size=(10, 8)):
+    def __init__(
+        self, image, window_level=None, figure_size=(10, 8), throttle_wait=0.05
+    ):
         self.image = image
         (
             self.npa,
@@ -858,6 +933,11 @@ class ROIDataAquisition(object):
             self.max_intensity,
         ) = self.get_window_level_numpy_array(self.image, window_level)
         self.rois = []
+
+        # Apply throttling to slider callback
+        self.on_slice_slider_value_change = throttle(throttle_wait)(
+            self._on_slice_slider_value_change
+        )
 
         # ROI display settings
         self.roi_display_properties = dict(
@@ -951,7 +1031,7 @@ class ROIDataAquisition(object):
             else widgets.HBox(children=[widgets.HBox(children=[bx1, bx2, bx3])])
         )
 
-    def on_slice_slider_value_change(self, change):
+    def _on_slice_slider_value_change(self, change):
         self.update_display()
 
     def get_window_level_numpy_array(self, image, window_level):
@@ -1061,7 +1141,7 @@ class ROIDataAquisition(object):
         try:
             roi_extent = [int(round(coord)) for coord in self.roi_selector.extents]
             # Check if the rectangle has non-zero area
-            if (roi_extent[1] - roi_extent[0] > 0 and roi_extent[3] - roi_extent[2] > 0):
+            if roi_extent[1] - roi_extent[0] > 0 and roi_extent[3] - roi_extent[2] > 0:
                 self.roi_selector.set_visible(False)
                 # We keep the patch for display and the x,y,z ranges of the ROI.
                 self.rois.append(
