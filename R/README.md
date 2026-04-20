@@ -10,7 +10,7 @@
 
 ### Install SimpleITK
 
-A remotes based installer is [available on github](https://github.com/SimpleITK/SimpleITKRInstaller). It requires that you have the [CMake tool](https://cmake.org/) and the [git version control system](https://git-scm.com/) installed on your machine.
+A remotes based installer is [available on github](https://github.com/SimpleITK/SimpleITKRInstaller).
 
 A manual approach to compiling and installing SimpleITK with the R wrapping turned on is described [here](https://simpleitk.readthedocs.io/en/latest/building.html).
 
