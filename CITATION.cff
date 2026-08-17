@@ -1,0 +1,32 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+type: software
+title: SimpleITK Image-Analysis Notebooks
+authors:
+  - family-names: Yaniv
+    given-names: Ziv
+  - family-names: Lowekamp
+    given-names: Bradley C.
+  - family-names: Johnson
+    given-names: Hans J.
+  - family-names: Beare
+    given-names: Richard
+preferred-citation:
+  type: article
+  authors:
+    - family-names: Yaniv
+      given-names: Ziv
+    - family-names: Lowekamp
+      given-names: Bradley C.
+    - family-names: Johnson
+      given-names: Hans J.
+    - family-names: Beare
+      given-names: Richard
+  title: "SimpleITK Image-Analysis Notebooks: A Collaborative Environment for Education and Reproducible Research"
+  doi: 10.1007/s10278-017-0037-8
+  journal: Journal of Digital Imaging
+  volume: 31
+  issue: 3
+  start: 290
+  end: 303
+  year: 2018
